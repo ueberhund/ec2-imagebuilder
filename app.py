@@ -4,6 +4,7 @@ import datetime
 import pandas as pd 
 import boto3
 import json
+import time
 
 def main():
     
@@ -29,25 +30,23 @@ def main():
     if not os.path.exists(output_location):
         os.makedirs(output_location)
 
-    # Initialize the where clause
-    where_clause = "1=1"  
+    should_continue = False
+    num_tries = 0
 
-    gis = GIS('https://hqfao-hub.maps.arcgis.com/home/group.html?id=4eca32aadf664a8f9a59d2dd68b7444d&view=list#content', USERNAME, PASS)
-    
-    # Get the group using the Group ID (From the group URL)
-    group = gis.groups.get("4eca32aadf664a8f9a59d2dd68b7444d")
-    group_items = group.content()
-    for group_item in group_items:
-        if group_item.title == "DIEM aggregated data (food security thematic area)":
-            print(f"Processing the {group_item.title} dataset.")
-            subset_feature_layer = group_item.layers[0]
-            df = subset_feature_layer.query(where=where_clause, out_fields = "*", returnGeometry=False, as_df=True)
-            df.to_csv(os.path.join(output_location,group_item.title + ".csv"))
-            print(f"Saved the {group_item.title} data in {output_location} .\n")
-    print("Data downloaded")
+    #Try this a few times to make sure we get data
+    while not should_continue and num_tries < 5:
+        try: 
+            num_tries += 1
+            file_path = download_data(USERNAME, PASS, output_location)
+            should_continue = True
+        except Exception as e:
+            print("Error downloading data: :{}".format(e))
+            time.sleep(60)
+
+    print("File path: {}".format(file_path))
 
     #Now process the data and delete all but the most current data collected
-    df = pd.read_csv('./temp/DIEM aggregated data (food security thematic area).csv')
+    df = pd.read_csv(file_path)
 
     #Pull out just the most recent data and save to CSV
     df['coll_start_date'] =  pd.to_datetime(df['coll_start_date']).dt.date
@@ -61,6 +60,29 @@ def main():
         s3.upload_file('./temp/food_security.csv', s3_bucket, s3_key, 
                     ExtraArgs={'ServerSideEncryption': 'aws:kms', "SSEKMSKeyId": ss3_key_id })
         print("Data saved to S3 with {} rows".format(len(df.index)))
+
+def download_data(username, password, output_location):
+    # Initialize the where clause
+    where_clause = "1=1"  
+
+    file_location = ""
+    gis = GIS('https://hqfao-hub.maps.arcgis.com/home/group.html?id=4eca32aadf664a8f9a59d2dd68b7444d&view=list#content', username, password)
+    
+    # Get the group using the Group ID (From the group URL)
+    group = gis.groups.get("4eca32aadf664a8f9a59d2dd68b7444d")
+    group_items = group.content()
+    for group_item in group_items:
+        if group_item.title == "DIEM aggregated data (food security thematic area)":
+            print(f"Processing the {group_item.title} dataset.")
+            subset_feature_layer = group_item.layers[0]
+            df = subset_feature_layer.query(where=where_clause, out_fields = "*", returnGeometry=False, as_df=True)
+            df.to_csv(os.path.join(output_location,group_item.title + ".csv"))
+            file_location = os.path.join(output_location, group_item.title + ".csv")
+            print(f"Saved the {group_item.title} data in {output_location} .\n")
+    print("Data downloaded")
+
+    return file_location
+
 
 if __name__ == "__main__":
     main()
